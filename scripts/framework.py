@@ -145,15 +145,37 @@ def desired(args):
     return root, files
 
 
-def owned_hashes(root):
-    owned = {}
-    receipts = sorted((root / ".framework-install").glob("*/receipt.json"))
-    for path in receipts:
+def receipt_paths(root, backup_dir=None):
+    """Discover old receipts and pointers to independent backup locations."""
+    locations = {absolute(root / ".framework-install")}
+    if backup_dir:
+        locations.add(absolute(backup_dir))
+    paths = set()
+    for location in locations:
+        paths.update(absolute(p) for p in location.glob("*/receipt.json"))
+        for pointer in location.glob("*.location.json"):
+            path = absolute(read_json(pointer)["receipt"])
+            if not path.is_file():
+                raise ValueError(f"Backup receipt missing: {path}; restore backup before continuing")
+            paths.add(path)
+    result = []
+    for path in sorted(paths):
         receipt = read_json(path)
-        if receipt.get("status") != "installed":
+        if receipt.get("target_root") and absolute(receipt["target_root"]) != root:
+            continue
+        result.append(path)
+    return sorted(result, key=lambda p: p.parent.name)
+
+
+def owned_hashes(root, backup_dir=None):
+    owned = {}
+    for path in receipt_paths(root, backup_dir):
+        receipt = read_json(path)
+        if receipt.get("kind", "install") != "install" or receipt.get("status") not in ("installed", "partially-uninstalled"):
             continue
         for item in receipt["files"]:
-            owned[item["target"]] = item
+            if item.get("applied") and not item.get("uninstalled"):
+                owned[item["target"]] = item
     return owned
 
 
@@ -161,7 +183,7 @@ def plan(args):
     _, agents, _ = targets(args)
     agents_snapshot = agents.read_bytes() if agents.exists() else None
     root, files = desired(args)
-    owned = owned_hashes(root)
+    owned = owned_hashes(root, getattr(args, "backup_dir", None))
     rows = []
     for path, incoming in files.items():
         if path.exists() and not path.is_file():
@@ -190,21 +212,37 @@ def plan(args):
     return root, files, rows
 
 
-def install(args):
-    root, incoming, rows = plan(args)
-    conflicts = [row for row in rows if row["action"] == "conflict"]
-    if conflicts and not args.replace_conflicts:
-        raise ValueError("Existing content conflicts; inspect plan and authorize --replace-conflicts")
+def original_bytes(receipt_path, item):
+    if not item.get("backup"):
+        if item["before_sha256"] is not None:
+            raise ValueError("Existing file has no backup")
+        return None
+    backup = absolute(receipt_path.parent / item["backup"])
+    if receipt_path.parent not in backup.parents:
+        raise ValueError("Backup escapes receipt directory")
+    old = backup.read_bytes()
+    if digest(old) != item["before_sha256"]:
+        raise ValueError(f"Backup integrity failed: {backup}")
+    return old
+
+
+def snapshot(root, rows, kind, backup_dir=None, **metadata):
+    """All preimages and their persisted receipt must verify before target writes."""
+    location = absolute(backup_dir or root / ".framework-install")
+    if location == ROOT or ROOT in location.parents:
+        raise ValueError("Backup location must not be inside the source package")
+    for row in rows:
+        target = absolute(row["target"])
+        if location == target or target in location.parents or (location in target.parents and not row.get("metadata")):
+            raise ValueError(f"Backup location overlaps a managed file: {target}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
-    state = root / ".framework-install" / stamp
+    state = location / stamp
     state.mkdir(parents=True, exist_ok=False)
     receipt_path = state / "receipt.json"
     receipt = {"schema_version": 1, "kit_version": read_json(ROOT / "manifest.json")["version"],
-               "harness": args.harness, "status": "preparing", "files": [], "created_directories": []}
-    # 在任何写入前保存全部前版本；收据不含文件正文。
+               "kind": kind, "target_root": str(root), "created_at": datetime.now(timezone.utc).isoformat(),
+               "status": "preparing", "files": [], "created_directories": [], **metadata}
     for i, row in enumerate(rows):
-        if row["action"] == "unchanged":
-            continue
         path = absolute(row["target"])
         before = path.read_bytes() if path.exists() else None
         if (digest(before) if before is not None else None) != row["before_sha256"]:
@@ -215,6 +253,18 @@ def install(args):
             atomic_write(state / item["backup"], before)
         receipt["files"].append(item)
     write_json(receipt_path, receipt)
+    persisted = read_json(receipt_path)
+    if persisted != receipt:
+        raise ValueError("Backup receipt verification failed")
+    for item in receipt["files"]:
+        original_bytes(receipt_path, item)
+    # Pointer keeps custom backup locations discoverable without remembering a path.
+    if location != absolute(root / ".framework-install"):
+        write_json(root / ".framework-install" / f"{stamp}.location.json", {"receipt": str(receipt_path)})
+    return receipt_path, receipt
+
+
+def apply_snapshot(receipt_path, receipt, incoming):
     try:
         for item in receipt["files"]:
             path = absolute(item["target"])
@@ -230,53 +280,105 @@ def install(args):
             # 记录预期写入，进程异常时可以依据 hash 定向恢复。
             item["applied"] = True
             write_json(receipt_path, receipt)
-            atomic_write(path, incoming[path])
-            if digest(path.read_bytes()) != item["installed_sha256"]:
+            if incoming[path] is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write(path, incoming[path])
+            current = digest(path.read_bytes()) if path.is_file() else None
+            if current != item["installed_sha256"]:
                 raise ValueError(f"Post-write verification failed: {path}")
         receipt["status"] = "installed"
         write_json(receipt_path, receipt)
     except Exception:
         receipt["status"] = "incomplete"
         write_json(receipt_path, receipt)
-        print(f"Incomplete install receipt: {receipt_path}", file=sys.stderr)
+        print(f"Incomplete operation receipt: {receipt_path}", file=sys.stderr)
         raise
-    return {"receipt": str(receipt_path), "backup_directory": str(state / "backups"),
-            "changed_files": len(receipt["files"]), "unchanged_files": len(rows) - len(receipt["files"])}
 
 
-def rollback(receipt_value):
+def install(args):
+    root, incoming, rows = plan(args)
+    for path in receipt_paths(root, getattr(args, "backup_dir", None)):
+        if read_json(path)["status"] in ("preparing", "incomplete"):
+            raise ValueError(f"Interrupted operation requires rollback first: {path}")
+    if any(row["action"] == "conflict" for row in rows) and not args.replace_conflicts:
+        raise ValueError("Existing content conflicts; inspect plan and authorize --replace-conflicts")
+    changed = [row for row in rows if row["action"] != "unchanged"]
+    _, agents, skills = targets(args)
+    location = absolute(getattr(args, "backup_dir", None) or root / ".framework-install")
+    if location == skills or skills in location.parents:
+        raise ValueError("Backup location must be outside the skills directory")
+    receipt_path, receipt = snapshot(root, changed, "install", getattr(args, "backup_dir", None),
+                                     harness=args.harness, agents_path=str(agents), skills_dir=str(skills))
+    apply_snapshot(receipt_path, receipt, incoming)
+    return {"receipt": str(receipt_path), "backup_directory": str(receipt_path.parent / "backups"),
+            "changed_files": len(changed), "unchanged_files": len(rows) - len(changed), "backups_verified": True}
+
+
+def backup(args):
+    root, _, rows = plan(args)
+    _, agents, skills = targets(args)
+    location = absolute(getattr(args, "backup_dir", None) or root / ".framework-install")
+    if location == skills or skills in location.parents:
+        raise ValueError("Backup location must be outside the skills directory")
+    path, receipt = snapshot(root, rows, "backup", getattr(args, "backup_dir", None),
+                             harness=args.harness, agents_path=str(agents), skills_dir=str(skills))
+    receipt["status"] = "snapshot"
+    write_json(path, receipt)
+    return {"receipt": str(path), "backup_directory": str(path.parent / "backups"),
+            "existing_files_backed_up": sum(x["backup"] is not None for x in receipt["files"]),
+            "absent_paths_recorded": sum(x["backup"] is None for x in receipt["files"]), "target_files_changed": 0}
+
+
+def rollback(receipt_value, restore_modified=False, dry_run=False):
     receipt_path = absolute(receipt_value)
     receipt = read_json(receipt_path)
-    if receipt.get("schema_version") != 1 or receipt.get("status") not in ("installed", "incomplete", "preparing"):
+    if receipt.get("schema_version") != 1 or receipt.get("status") not in ("installed", "incomplete", "preparing", "snapshot"):
         raise ValueError("Receipt is not an active installation")
     actions = []
     # 全部核对后再恢复；目标后续改动、损坏备份和路径链接都会阻止回滚。
     for item in receipt["files"]:
-        if not item["applied"]:
+        if not item["applied"] and receipt.get("kind") != "backup":
             continue
         path = absolute(item["target"])
+        if path.exists() and not path.is_file():
+            raise ValueError(f"Rollback destination must be a file: {path}")
         now = path.read_bytes() if path.is_file() else None
         current = digest(now) if now is not None else None
         if current == item["before_sha256"]:
             continue
-        if current != item["installed_sha256"]:
-            raise ValueError(f"Modified after install; refusing rollback: {path}")
-        old = None
-        if item["backup"]:
-            backup = absolute(receipt_path.parent / item["backup"])
-            if receipt_path.parent not in backup.parents:
-                raise ValueError("Backup escapes receipt directory")
-            old = backup.read_bytes()
-            if digest(old) != item["before_sha256"]:
-                raise ValueError("Backup integrity failed")
+        if not restore_modified and (receipt.get("kind") == "backup" or current != item["installed_sha256"]):
+            raise ValueError(f"Modified after install; refusing rollback: {path}. Use uninstall to preserve personal changes; explicitly choose --restore-modified for full restoration with a safety backup")
+        old = original_bytes(receipt_path, item)
         actions.append((path, old, current))
-    for path, old, expected in reversed(actions):
-        if digest(path.read_bytes()) != expected:
-            raise ValueError(f"Concurrent change during rollback: {path}")
-        if old is None:
-            path.unlink()
-        else:
-            atomic_write(path, old)
+    if dry_run:
+        return {"receipt": str(receipt_path), "dry_run": True, "files": [
+            {"target": str(path), "action": "remove" if old is None else "restore"} for path, old, _ in actions]}
+    safety = None
+    if restore_modified and actions:
+        root = absolute(receipt.get("target_root", receipt_path.parent.parent.parent))
+        rows = [{"target": str(path), "action": "restore", "before_sha256": current,
+                 "installed_sha256": digest(old) if old is not None else None,
+                 "metadata": path.name == "receipt.json"} for path, old, current in actions]
+        receipt_before = receipt_path.read_bytes()
+        rolled_back = dict(receipt, status="rolled-back")
+        receipt_after = (json.dumps(rolled_back, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        rows.append({"target": str(receipt_path), "action": "update-install-record", "metadata": True,
+                     "before_sha256": digest(receipt_before), "installed_sha256": digest(receipt_after)})
+        safety, journal = snapshot(root, rows, "recovery", str(receipt_path.parent.parent),
+                                   harness=receipt.get("harness"), operation="rollback")
+        incoming = {path: old for path, old, _ in actions}
+        incoming[receipt_path] = receipt_after
+        apply_snapshot(safety, journal, incoming)
+    if not safety:
+        for path, old, expected in reversed(actions):
+            current = digest(path.read_bytes()) if path.is_file() else None
+            if current != expected:
+                raise ValueError(f"Concurrent change during rollback: {path}")
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_write(path, old)
     # 仅移除本次创建且为空的目录，不递归删除。
     for directory in reversed(receipt.get("created_directories", [])):
         path = absolute(directory)
@@ -284,7 +386,154 @@ def rollback(receipt_value):
             path.rmdir()
     receipt["status"] = "rolled-back"
     write_json(receipt_path, receipt)
-    return {"receipt": str(receipt_path), "restored_files": len(actions), "backups_retained": True}
+    return {"receipt": str(receipt_path), "restored_files": len(actions), "backups_retained": True,
+            "safety_receipt": str(safety) if safety else None}
+
+
+def lookup_root(args):
+    adapter = read_json(ROOT / "adapters" / args.harness / "adapter.json")
+    configured = os.environ.get(adapter["root_environment"]) if adapter["root_environment"] else None
+    return absolute(args.target_root or configured or Path.home() / adapter["home_directory"])
+
+
+def history(args):
+    root = lookup_root(args)
+    result = []
+    for path in receipt_paths(root, getattr(args, "backup_dir", None)):
+        receipt = read_json(path)
+        result.append({"receipt": str(path), "kind": receipt.get("kind", "install"),
+                       "status": receipt["status"], "kit_version": receipt.get("kit_version"),
+                       "created_at": receipt.get("created_at", path.parent.name),
+                       "files": len(receipt["files"]), "harness": receipt.get("harness")})
+    return {"target_root": str(root), "records": result}
+
+
+def select_receipt(args):
+    if args.receipt:
+        return absolute(args.receipt)
+    if not args.harness:
+        raise ValueError("--latest requires --harness (and --target-root for a custom target)")
+    records = history(args)["records"]
+    active = [r for r in records if r["harness"] == args.harness
+              and r["status"] in ("installed", "incomplete", "preparing", "snapshot")
+              and (r["kind"] != "install" or r["files"])]
+    if not active:
+        raise ValueError("No active receipt found")
+    return Path(active[-1]["receipt"])
+
+
+def uninstall(args):
+    root = lookup_root(args)
+    sources, first, latest = [], {}, {}
+    for receipt_path in receipt_paths(root, getattr(args, "backup_dir", None)):
+        receipt = read_json(receipt_path)
+        if receipt.get("kind", "install") != "install" or receipt["status"] not in ("installed", "partially-uninstalled"):
+            continue
+        if receipt.get("harness") != args.harness:
+            continue
+        sources.append((receipt_path, receipt))
+        if getattr(args, "backup_dir", None) and receipt.get("skills_dir"):
+            location = absolute(args.backup_dir)
+            skills = absolute(receipt["skills_dir"])
+            if location == skills or skills in location.parents:
+                raise ValueError("Backup location must be outside the skills directory")
+        for item in receipt["files"]:
+            if item.get("applied") and not item.get("uninstalled"):
+                first.setdefault(item["target"], (receipt_path, item))
+                latest[item["target"]] = item
+    # Ambiguous interrupted writes must be recovered before interpreting ownership.
+    for path in receipt_paths(root, getattr(args, "backup_dir", None)):
+        rec = read_json(path)
+        if rec["status"] in ("preparing", "incomplete"):
+            raise ValueError(f"Interrupted operation requires rollback first: {path}")
+    incoming, rows, skipped, resolved, preview = {}, [], [], set(), []
+    for target, (source_path, base) in first.items():
+        item = latest[target]
+        path = absolute(target)
+        if path.exists() and not path.is_file():
+            skipped.append({"target": target, "reason": "Target is not a regular file"})
+            continue
+        now = path.read_bytes() if path.exists() else None
+        old = original_bytes(source_path, base)
+        current = digest(now) if now is not None else None
+        if current == base["before_sha256"]:
+            resolved.add(target)
+            preview.append({"target": target, "action": "already-restored"})
+            continue
+        is_agents = "installed_block_sha256" in item
+        if is_agents and now is not None:
+            try:
+                text, encoding, bom, span = split_agents(now)
+            except ValueError as exc:
+                skipped.append({"target": target, "reason": str(exc)})
+                continue
+            if span is None:
+                resolved.add(target)
+                preview.append({"target": target, "action": "framework-already-absent"})
+                continue
+            if block_hash(now) != item["installed_block_sha256"] and not getattr(args, "remove_modified_block", False):
+                skipped.append({"target": target, "reason": "Framework block modified; review and explicitly choose --remove-modified-block, or retain it"})
+                continue
+            replacement = ""
+            if old is not None:
+                old_text, _, _, old_span = split_agents(old)
+                if old_span:
+                    replacement = old_text[old_span[0]:old_span[1]]
+            # Preserve every outside character, including user additions and newline style.
+            after = bom + (text[:span[0]] + replacement + text[span[1]:]).encode(encoding)
+            if old is None and not text[:span[0]] and text[span[1]:] in ("\n", "\r\n"):
+                after = None
+            elif old is not None:
+                # For untouched pre-install outside content restore exact original bytes.
+                old_text, old_encoding, old_bom, old_span = split_agents(old)
+                if old_span is None and encoding == old_encoding and bom == old_bom:
+                    newline = "\r\n" if "\r\n" in old_text else "\n"
+                    separator = "" if not old_text else (newline if old_text.endswith("\n") else newline * 2)
+                    if text[:span[0]] == old_text + separator and text[span[1]:] == newline:
+                        after = old
+        elif current == item["installed_sha256"]:
+            after = old
+        else:
+            skipped.append({"target": target, "reason": "Skill file modified or removed after install; retained for manual review"})
+            continue
+        incoming[path] = after
+        rows.append({"target": target, "action": "remove" if after is None else "restore-or-remove-block",
+                     "before_sha256": current, "installed_sha256": digest(after) if after is not None else None})
+        resolved.add(target)
+        preview.append({"target": target, "action": rows[-1]["action"]})
+    if getattr(args, "dry_run", False):
+        return {"dry_run": True, "files": preview, "preserved_modified_files": skipped}
+    if not sources:
+        return {"status": "not-installed", "changed_files": 0, "backups_retained": True}
+    # Source receipt updates are backed up in the uninstall journal too; undoing an
+    # uninstall restores both configuration and its ownership bookkeeping.
+    for source_path, receipt in sources:
+        before = source_path.read_bytes()
+        if json.loads(before) != receipt:
+            raise ValueError(f"Concurrent change to installation record: {source_path}")
+        for item in receipt["files"]:
+            if item["target"] in resolved:
+                item["uninstalled"] = True
+        remaining = any(x.get("applied") and not x.get("uninstalled") for x in receipt["files"])
+        receipt["status"] = "partially-uninstalled" if remaining else "uninstalled"
+        after = (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if before != after:
+            incoming[source_path] = after
+            rows.append({"target": str(source_path), "action": "update-install-record", "metadata": True,
+                         "before_sha256": digest(before), "installed_sha256": digest(after)})
+    journal_path = None
+    if rows:
+        journal_path, journal = snapshot(root, rows, "uninstall", getattr(args, "backup_dir", None), harness=args.harness)
+        apply_snapshot(journal_path, journal, incoming)
+    for _, receipt in sources:
+        for directory in reversed(receipt.get("created_directories", [])):
+            path = absolute(directory)
+            if path.is_dir() and not any(path.iterdir()):
+                path.rmdir()
+    return {"status": "partially-uninstalled" if skipped else "uninstalled",
+            "receipt": str(journal_path) if journal_path else None,
+            "changed_files": sum(not row.get("metadata") for row in rows),
+            "preserved_modified_files": skipped, "backups_retained": True}
 
 
 def validate():
@@ -342,19 +591,30 @@ def bundle():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("plan", "install"):
+    for command in ("plan", "install", "backup", "history", "uninstall"):
         p = sub.add_parser(command)
         p.add_argument("--harness", choices=("codex", "zcode"), required=True)
         p.add_argument("--target-root")
         p.add_argument("--agents-path")
         p.add_argument("--skills-dir")
+        p.add_argument("--backup-dir")
         if command == "install":
             p.add_argument("--replace-conflicts", action="store_true")
+        if command == "uninstall":
+            p.add_argument("--dry-run", action="store_true")
+            p.add_argument("--remove-modified-block", action="store_true")
     sub.add_parser("inspect")
     sub.add_parser("validate")
     sub.add_parser("bundle")
     p = sub.add_parser("rollback")
-    p.add_argument("--receipt", required=True)
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--receipt")
+    group.add_argument("--latest", action="store_true")
+    p.add_argument("--harness", choices=("codex", "zcode"))
+    p.add_argument("--target-root")
+    p.add_argument("--backup-dir")
+    p.add_argument("--restore-modified", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
         if args.command == "inspect":
@@ -371,7 +631,14 @@ def main():
         elif args.command == "bundle":
             result = bundle()
         elif args.command == "rollback":
-            result = rollback(args.receipt)
+            result = rollback(select_receipt(args), args.restore_modified, args.dry_run)
+        elif args.command == "history":
+            result = history(args)
+        elif args.command == "backup":
+            validate()
+            result = backup(args)
+        elif args.command == "uninstall":
+            result = uninstall(args)
         elif args.command == "install":
             validate()
             result = install(args)

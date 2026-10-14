@@ -6,7 +6,7 @@
 | 清理参考 | `.codex` / `CODEX_HOME`、数据库及 rollout 线索 | `.zcode/cli`、`.zcode/v2`、表关联线索 |
 | 目标 AGENTS 默认路径 | `CODEX_HOME/AGENTS.md`，回退 `~/.codex/AGENTS.md` | `~/.zcode/AGENTS.md`，依据用户提供路径，未实机读取 |
 | 技能安装默认目录 | `CODEX_HOME/skills`，回退 `~/.codex/skills` | 源材料未说明，必须显式指定 |
-| 文件部署、备份和回滚 | 临时目录测试通过 | 自定义临时路径测试通过 |
+| 文件部署、强制备份、回滚和卸载 | 临时目录测试通过，无 Git 必需依赖 | 自定义临时路径 CLI 测试通过，无 Git 必需依赖 |
 | 宿主技能自动发现 | 本次未进行新会话实测 | 本机无 ZCode，未实测 |
 | UI 元数据 | 提供 `agents/openai.yaml` | 是否忽略/支持此元数据待核实 |
 | 清理业务实际执行 | 本次未执行 | 本次未执行 |

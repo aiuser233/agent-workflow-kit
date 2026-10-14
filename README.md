@@ -12,9 +12,9 @@
 
 ## 环境
 
-- 版本：`0.3.0`；日期：2026-10-14（Asia/Shanghai）。
+- 版本：`0.4.0`；日期：2026-10-14（Asia/Shanghai）。
 - 构建/安装/核验：Python 3.10+，全部运行脚本仅使用标准库；开发备份使用 Git。
-- 使用规则和手动复制无需 Python。打包技能涉及的 Python/PyInstaller 仅在实际 exe 任务使用，不是框架依赖。
+- 阅读规则无需 Python；安装、配置备份、回滚和卸载不需要 Git，只需 Python。受限环境人工部署必须完成同等备份与校验，否则停止。打包技能的 PyInstaller 仅在实际 exe 任务使用，不是框架依赖。
 - 本次在 Windows/Python 3.12 验证临时目录中的部署机制。尚未在 Codex/ZCode 新会话中验证自动发现和业务执行；ZCode 未安装于本机。
 
 ## 边界
@@ -40,10 +40,11 @@
 - 2026-10-14：0.2.0 安装改为追加和维护独立框架区块，保留用户 Python 路径等个人设置；补充 ZCode 全局规则路径及子技能功能。
 - 2026-10-14：原始双文件已核对 Git 历史后移出工作目录，移除旧提取工具，今后直接维护框架源。
 - 2026-10-14：0.3.0 完善 7 个子技能：区分方案与实施授权、按规模维护 README、数据最小模板、报告格式分流、GUI 长任务与输出路径、Git 混合改动隔离及清理证据清单。
+- 2026-10-14：0.4.0 增加强制备份读回校验、独立备份位置与记录查询、单独快照、保留个人设置的卸载和完整恢复前安全快照；配置备份不依赖 Git。
 
 ## 当前状态与下一步
 
-0.3.0 子技能改进已写入，追加合并、编码、冲突、升级与回滚及 Git 隔离提交机制通过自动测试（18 通过、1 项权限跳过）。原件删除前与 Git 历史逐字节核对，文档链接和技能格式通过检查。当前应用配置未改动；新增业务场景尚待宿主实测。
+0.4.0 配置备份与退出流程已实现，新增临时目录中的失败、中断、无 Git、个人设置保留与卸载恢复核验；检查结果见验证记录。当前应用配置未改动，宿主技能发现及业务行为仍待实测。
 
 待办：核实 ZCode skills 加载路径，并实机读取/验证用户提供的全局规则路径；分别在新 Codex/ZCode 会话验证技能发现与行为场景；后续按实测结果补兼容矩阵。未支持其他 harness，增加时维护 adapter 和相应清理规则，不能只替换产品名。
 
@@ -55,9 +56,10 @@ SKILL.md                             总安装入口
 manifest.json                        版本、组件、原件 Git 引用/哈希与章节映射
 skills/                              7 个业务技能（入口、参考和 Codex UI 元数据）
 adapters/{codex,zcode}/adapter.json   目标路径规则及实测状态
-scripts/framework.py                 检测、预览、安装、回滚、核验、打包
+scripts/framework.py                 检测、预览、安装、备份、记录查询、回滚、卸载、打包
 tests/test_framework.py              临时目录部署契约测试
 tests/test_git_isolation.py          临时仓库混合改动与失败提交机制核验
+tests/test_recovery.py               强制备份与卸载/恢复保护测试
 docs/                                兼容性、原规则迁移和行为验收场景
 output/                              本地生成 ZIP，Git 忽略；运行 bundle 时创建
 ```
@@ -76,7 +78,7 @@ output/                              本地生成 ZIP，Git 忽略；运行 bund
 | `local-git-commit` | 明确提交或默认项目里程碑 | 按块区分任务/用户改动，必要时隔离索引并协调新 HEAD 后的暂存状态，失败保护用户内容；只本地提交 |
 | `cleanup-local-residue` | 明确清理已删除项目/对话残留 | 分别核实身份、删除证据、保护引用和并发状态，模拟/只读核验后定向处理；成果/附件不因目录名变为可删缓存 |
 
-根 `SKILL.md` 仅负责本框架的安装、迁移、升级与回滚，不替代上述业务技能。各技能的权限/触发边界以入口正文为准；仅安装不授权实际清理等业务操作。提及名称不代表技能已加载：先通过宿主发现，未发现按部署映射或相邻入口读取，缺失如实报告。详细模板和特殊操作留在 references 按需读取。
+根 `SKILL.md` 仅负责本框架的安装、迁移、备份、升级、回滚与卸载，不替代上述业务技能。各技能的权限/触发边界以入口正文为准；仅安装不授权实际清理等业务操作。提及名称不代表技能已加载：先通过宿主发现，未发现按部署映射或相邻入口读取，缺失如实报告。详细模板和特殊操作留在 references 按需读取。
 
 ## 安装与迁移
 
@@ -102,13 +104,16 @@ python scripts/framework.py plan --harness zcode --skills-dir <已核实的技�
 
 框架区块的起止标记为 `<!-- agent-workflow-kit:begin -->` / `<!-- agent-workflow-kit:end -->`，各独占一行。个人 Python 路径等设置写在区块外，以便升级时保留。
 
-每次安装在 `<target-root>/.framework-install/<时间-随机ID>/` 保存收据和被覆盖文件的完整原版本。保留此目录以回滚，备份可能含使用者原配置，不提交或分享。
+每次安装在 `<target-root>/.framework-install/<时间-随机ID>/` 保存收据和待改文件完整原版本；必须重新读取并校验全部备份后才写配置，失败则停止。默认备份目录在技能目录之外，也可用 `--backup-dir <独立目录>` 指定位置。备份可能含个人配置，不提交或分享；没有 Git 备份模式，也不需要 Git。
 
 ```powershell
 python scripts/framework.py rollback --receipt <安装输出的receipt.json路径>
+python scripts/framework.py history --harness codex
+python scripts/framework.py uninstall --harness codex --dry-run
+python scripts/framework.py uninstall --harness codex
 ```
 
-回滚逐项核对当前内容和备份哈希，保护安装后的用户修改；仅删除本次新建文件和空目录。备份与收据保留；多个升级按最新到最旧顺序回滚。脚本使用原子单文件写入并检测前后变更，不能把多个文件安装当作跨进程事务；请勿与其他安装器同时修改同一路径，安装中断按收据恢复。
+回滚恢复某次操作前状态，后续修改默认阻止覆盖；卸载移除框架区块，保留区块外新设置，恢复原有同名技能或删除未修改的新建文件。修改过的区块/技能默认保留并报告部分卸载。卸载本身也先备份，备份与收据均保留。单独快照、记录查询、最新回滚和完整恢复的参数见 [恢复指南](docs/recovery.md)。多次升级按最新到最旧回滚；多文件不构成跨进程事务，操作期间勿并发修改，中断按收据恢复。
 
 ### 一个入口交付
 
@@ -116,9 +121,9 @@ python scripts/framework.py rollback --receipt <安装输出的receipt.json路�
 python scripts/framework.py bundle
 ```
 
-产物 `output/agent-workflow-kit-0.3.0.zip` 包含 `agent-workflow-kit/` 整体目录。在目标 harness 中把这个目录作为安装 skill 使用，明确请求它迁移到选定 harness；或解压后直接运行脚本。不会自动递归注册子技能，必须执行展开安装或手动复制。
+产物 `output/agent-workflow-kit-0.4.0.zip` 包含 `agent-workflow-kit/` 整体目录。在目标 harness 中把这个目录作为安装 skill 使用，明确请求它迁移到选定 harness；或解压后直接运行脚本。不会自动递归注册子技能，必须执行展开安装。
 
-手动部署：先备份实际加载的全局规则；保留原文，在文件末尾的起止标记内追加核心内容、个人规则优先说明及实际 skills 路径/harness。已有区块时只更新区块，不重复追加。将 `skills/` 下各业务技能目录复制到已核实的技能目录。新会话发现失败时，可要求 AI 按实际路径读取 `SKILL.md`。`agents/openai.yaml` 是 Codex 专属 UI 元数据，其他 harness 是否忽略它需按宿主核实；它不影响通用 Markdown 规则。
+受限环境人工部署也必须对所有待改文件备份并校验，记录不存在的路径和写后哈希，保留原文、框架标记及路径映射；做不到就停止，不能以手动复制绕过保护。推荐先配置 Python 再运行安装器，自动卸载依赖其收据。新会话发现失败时可按实际路径读取 `SKILL.md`。`agents/openai.yaml` 是 Codex UI 元数据，其他 harness 是否忽略它需核实。
 
 ## 开发与复现
 

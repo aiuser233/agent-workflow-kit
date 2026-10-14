@@ -279,6 +279,20 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             report = json.loads(completed.stdout)
             if "receipt" in report:
+                recovery_target = ["--harness", command[2], "--target-root",
+                                   command[command.index("--target-root") + 1]]
+                for recovery_command in (["history", *recovery_target],
+                                         ["uninstall", *recovery_target, "--dry-run"],
+                                         ["uninstall", *recovery_target]):
+                    recovery = subprocess.run([sys.executable, "-X", "utf8", str(script), *recovery_command],
+                                              cwd=self.base, capture_output=True, text=True, encoding="utf-8")
+                    self.assertEqual(recovery.returncode, 0, recovery.stderr)
+                    recovery_report = json.loads(recovery.stdout)
+                    if recovery_command[0] == "uninstall" and "--dry-run" not in recovery_command:
+                        undo = subprocess.run([sys.executable, "-X", "utf8", str(script), "rollback",
+                                               "--receipt", recovery_report["receipt"]], cwd=self.base,
+                                              capture_output=True, text=True, encoding="utf-8")
+                        self.assertEqual(undo.returncode, 0, undo.stderr)
                 rollback = subprocess.run([sys.executable, "-X", "utf8", str(script), "rollback",
                                            "--receipt", report["receipt"]], cwd=self.base,
                                           capture_output=True, text=True, encoding="utf-8")
