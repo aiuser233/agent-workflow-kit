@@ -24,7 +24,7 @@
 - 未知 harness 没有适配器则拒绝安装；版本/表名按实际环境核实。
 - ZCode 全局规则按用户提供路径结构定位到当前用户 `~/.zcode/AGENTS.md`；skills 加载位置仍须显式指定。`.zcode/cli` 和 `.zcode/v2` 是数据存储线索，不能等同技能目录。
 - 当前交付是通用 skill 文件布局与可指定路径的 ZCode 部署，不能宣称已验证 ZCode 原生技能发现。
-- Git 保留本地版本历史，GitHub 私有仓库用于远程备份；日常任务仍只默认本地提交，推送需要用户明确要求。
+- Git 保留本地版本历史，GitHub 公开仓库用于远程备份和分享；日常任务仍只默认本地提交，推送需要用户明确要求。
 
 ## 术语和默认值
 
@@ -137,7 +137,7 @@ git diff --check
 
 ## GitHub 备份
 
-远程仓库：[aiuser233/agent-workflow-kit](https://github.com/aiuser233/agent-workflow-kit)，私有可见性，默认分支 `main`。访问和克隆需要仓库权限。源码、文档、测试与原始规则的 Git 历史均保留；`output/` 等忽略的生成物不进入版本历史，ZIP 可通过 `bundle` 重建。
+远程仓库：[aiuser233/agent-workflow-kit](https://github.com/aiuser233/agent-workflow-kit)，公开可见性，默认分支 `main`。任何人均可查看和克隆，写入仍需仓库权限。源码、文档、测试与原始规则的 Git 历史均保留；`output/` 等忽略的生成物不进入版本历史，ZIP 可通过 `bundle` 重建。
 
 ```powershell
 git clone https://github.com/aiuser233/agent-workflow-kit.git
