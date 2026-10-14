@@ -12,6 +12,56 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+BLOCK_START = "<!-- agent-workflow-kit:begin -->"
+BLOCK_END = "<!-- agent-workflow-kit:end -->"
+
+
+def split_agents(raw):
+    """Decode without normalizing BOM/newlines; outside block round-trips exactly."""
+    if raw.startswith(b"\xff\xfe"):
+        encoding, bom = "utf-16-le", b"\xff\xfe"
+    elif raw.startswith(b"\xfe\xff"):
+        encoding, bom = "utf-16-be", b"\xfe\xff"
+    else:
+        encoding = "utf-8"
+        bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+    try:
+        text = raw[len(bom):].decode(encoding)
+    except UnicodeError as exc:
+        raise ValueError("AGENTS encoding must be UTF-8 or BOM-marked UTF-16; preserve original and convert explicitly") from exc
+    starts, ends = text.count(BLOCK_START), text.count(BLOCK_END)
+    if starts != ends or starts > 1:
+        raise ValueError("Malformed/duplicate framework markers; manual review required")
+    span = None
+    if starts:
+        start = text.index(BLOCK_START)
+        end = text.index(BLOCK_END)
+        if end < start:
+            raise ValueError("Reversed framework markers; manual review required")
+        span = (start, end + len(BLOCK_END))
+        # 标记应独占一行，避免替换混入的用户正文。
+        for marker in (BLOCK_START, BLOCK_END):
+            if not re.search(r"(?m)^" + re.escape(marker) + r"\r?$", text):
+                raise ValueError("Framework markers must occupy complete lines")
+    return text, encoding, bom, span
+
+
+def block_hash(raw):
+    text, encoding, _, span = split_agents(raw)
+    return digest(text[span[0]:span[1]].encode(encoding)) if span else None
+
+
+def merge_agents(existing, core):
+    text, encoding, bom, span = split_agents(existing)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    body = "本区块是框架默认规则；区块外已有用户要求保留并优先适用。发生实质冲突时说明，不自行删除或改写用户要求。\n\n" + core
+    block = BLOCK_START + newline + body.strip().replace("\n", newline) + newline + BLOCK_END
+    if span:
+        merged = text[:span[0]] + block + text[span[1]:]
+    else:
+        separator = "" if not text else (newline if text.endswith("\n") else newline * 2)
+        merged = text + separator + block + newline
+    return bom + merged.encode(encoding)
 
 
 def digest(data):
@@ -79,7 +129,9 @@ def desired(args):
         relative = skills.as_posix()
     core = (ROOT / manifest["core"]).read_text(encoding="utf-8").rstrip()
     core += f"\n\n## 本机部署映射\n\n当前 harness：`{args.harness}`。技能目录相对于本文件：`{relative}`。若未发现技能，从此目录读取对应 `SKILL.md`。残留清理仅使用对应 harness 的参考规则。\n"
-    files = {agents: core.encode("utf-8")}
+    if agents.exists() and not agents.is_file():
+        raise ValueError("AGENTS destination must be a regular file")
+    files = {agents: merge_agents(agents.read_bytes() if agents.exists() else b"", core)}
     for name in manifest["skills"]:
         for source in sorted((ROOT / "skills" / name).rglob("*")):
             if source.is_file():
@@ -101,11 +153,13 @@ def owned_hashes(root):
         if receipt.get("status") != "installed":
             continue
         for item in receipt["files"]:
-            owned[item["target"]] = item["installed_sha256"]
+            owned[item["target"]] = item
     return owned
 
 
 def plan(args):
+    _, agents, _ = targets(args)
+    agents_snapshot = agents.read_bytes() if agents.exists() else None
     root, files = desired(args)
     owned = owned_hashes(root)
     rows = []
@@ -113,17 +167,26 @@ def plan(args):
         if path.exists() and not path.is_file():
             raise ValueError(f"File destination is not a regular file: {path}")
         before = path.read_bytes() if path.exists() else None
+        if path == agents and before != agents_snapshot:
+            raise ValueError("AGENTS changed during merge planning; retry after concurrent writer stops")
         current_hash = digest(before) if before is not None else None
         if before == incoming:
             action = "unchanged"
         elif before is None:
             action = "create"
-        elif owned.get(str(path)) == current_hash:
+        elif path == agents and block_hash(before) is None:
+            action = "append-framework"
+        elif path == agents and owned.get(str(path), {}).get("installed_block_sha256") == block_hash(before):
+            action = "update-framework-block"
+        elif owned.get(str(path), {}).get("installed_sha256") == current_hash:
             action = "update-managed"
         else:
             action = "conflict"
-        rows.append({"target": str(path), "action": action, "before_sha256": current_hash,
-                     "installed_sha256": digest(incoming)})
+        row = {"target": str(path), "action": action, "before_sha256": current_hash,
+               "installed_sha256": digest(incoming)}
+        if path == agents:
+            row["installed_block_sha256"] = block_hash(incoming)
+        rows.append(row)
     return root, files, rows
 
 
@@ -258,7 +321,8 @@ def validate():
             errors.append(f"Adapter mismatch: {harness}")
     if errors:
         raise ValueError("\n".join(errors))
-    return {"skills": len(paths), "sources_verified_if_present": True, "links_valid": True}
+    return {"skills": len(paths), "source_files_present": sum((ROOT / item["path"]).exists() for item in manifest["sources"]),
+            "links_valid": True}
 
 
 def bundle():
@@ -300,7 +364,8 @@ def main():
                 configured = os.environ.get(adapter["root_environment"]) if adapter["root_environment"] else None
                 root = absolute(configured or Path.home() / adapter["home_directory"])
                 result["candidates"].append({"harness": name, "root": str(root), "exists": root.exists(),
-                                              "explicit_loader_paths_required": name == "zcode"})
+                                              "agents_path": str(root / adapter["agents_relative_path"]) if adapter["agents_relative_path"] else None,
+                                              "explicit_skills_path_required": adapter["skills_relative_path"] is None})
         elif args.command == "validate":
             result = validate()
         elif args.command == "bundle":

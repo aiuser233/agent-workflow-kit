@@ -54,11 +54,9 @@ class DeploymentTests(unittest.TestCase):
         unrelated = skills / "other-skill" / "SKILL.md"
         unrelated.parent.mkdir(parents=True)
         unrelated.write_bytes(b"keep")
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            fw.install(args)
-        self.assertEqual(agents.read_bytes(), original)
-        args.replace_conflicts = True
         result = fw.install(args)
+        self.assertTrue(agents.read_bytes().startswith(original))
+        self.assertEqual(agents.read_text(encoding="utf-8").count(fw.BLOCK_START), 1)
         receipt = fw.read_json(Path(result["receipt"]))
         item = next(x for x in receipt["files"] if x["target"] == str(agents))
         self.assertEqual((Path(result["receipt"]).parent / item["backup"]).read_bytes(), original)
@@ -74,8 +72,9 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Modified after install"):
             fw.rollback(result["receipt"])
         self.assertEqual(agents.read_bytes(), b"new user edit")
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            fw.install(args)
+        # 用户完整移除框架后，重新安装只能追加，不能替换其新正文。
+        fw.install(args)
+        self.assertTrue(agents.read_bytes().startswith(b"new user edit"))
 
     def test_replace_modified_install_can_restore_user_edit(self):
         args = self.args()
@@ -90,7 +89,10 @@ class DeploymentTests(unittest.TestCase):
     def test_missing_zcode_loader_and_source_overlap_refused(self):
         args = self.args("zcode")
         args.agents_path = None
-        with self.assertRaisesRegex(ValueError, "explicit --agents-path"):
+        _, agents, _ = fw.targets(args)
+        self.assertEqual(agents, (self.base / "zcode" / "AGENTS.md").resolve())
+        args.skills_dir = None
+        with self.assertRaisesRegex(ValueError, "explicit --skills-dir"):
             fw.plan(args)
         args = self.args()
         args.target_root = str(ROOT)
@@ -138,15 +140,101 @@ class DeploymentTests(unittest.TestCase):
         root, expected = fw.desired(args)
         _, agents, _ = fw.targets(args)
         original = expected[agents]
-        expected[agents] += b"\nupgraded rules\n"
+        expected[agents] = expected[agents].replace(b"# Agent ", b"# Upgraded Agent ")
         with patch.object(fw, "desired", return_value=(root, expected)):
             _, _, rows = fw.plan(args)
-            self.assertEqual(next(r for r in rows if r["target"] == str(agents))["action"], "update-managed")
+            self.assertEqual(next(r for r in rows if r["target"] == str(agents))["action"], "update-framework-block")
             second = fw.install(args)
         fw.rollback(second["receipt"])
         self.assertEqual(agents.read_bytes(), original)
         fw.rollback(first["receipt"])
         self.assertFalse(agents.exists())
+
+    def test_merge_preserves_encoding_bom_newlines_and_user_paths(self):
+        text = "# User settings\r\nPython: C:\\tools\\Python312\\python.exe\r\n中文要求，不增加图表。"
+        for encoding, bom in (("utf-8", b""), ("utf-8", b"\xef\xbb\xbf"),
+                              ("utf-16-le", b"\xff\xfe"), ("utf-16-be", b"\xfe\xff")):
+            with self.subTest(encoding=encoding, bom=bom):
+                original = bom + text.encode(encoding)
+                merged = fw.merge_agents(original, "# Framework\nRules")
+                self.assertTrue(merged.startswith(original))
+                self.assertEqual(fw.merge_agents(merged, "# Framework\nRules"), merged)
+                prefix, _, _, span = fw.split_agents(merged)
+                suffix = "\r\n# User additions\r\n"
+                with_suffix = bom + (prefix + suffix).encode(encoding)
+                upgraded = fw.merge_agents(with_suffix, "# New framework")
+                self.assertTrue(upgraded.startswith(original))
+                self.assertTrue(upgraded.endswith(suffix.encode(encoding)))
+                self.assertEqual(upgraded.count(fw.BLOCK_START.encode(encoding)), 1)
+
+    def test_external_user_edits_survive_managed_upgrade(self):
+        args = self.args()
+        fw.install(args)
+        _, agents, _ = fw.targets(args)
+        agents.write_bytes(b"Python: custom-python\n\n" + agents.read_bytes() + b"\nUser suffix\n")
+        user_version = agents.read_bytes()
+        # simulate new core release using the real merger rather than bypassing it
+        original_read_text = Path.read_text
+        def new_core(path, *a, **kw):
+            value = original_read_text(path, *a, **kw)
+            return value + "\nNew release rule\n" if path == ROOT / "AGENTS.md" else value
+        with patch.object(Path, "read_text", new_core):
+            _, _, rows = fw.plan(args)
+            self.assertEqual(next(r for r in rows if r["target"] == str(agents))["action"], "update-framework-block")
+            result = fw.install(args)
+        self.assertTrue(agents.read_bytes().startswith(b"Python: custom-python\n\n"))
+        self.assertTrue(agents.read_bytes().endswith(b"\nUser suffix\n"))
+        fw.rollback(result["receipt"])
+        self.assertEqual(agents.read_bytes(), user_version)
+
+    def test_modified_framework_block_requires_authorization(self):
+        args = self.args()
+        fw.install(args)
+        _, agents, _ = fw.targets(args)
+        agents.write_bytes(b"keep user prefix\n\n" + agents.read_bytes().replace(b"# Agent ", b"# User-modified Agent "))
+        before = agents.read_bytes()
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            fw.install(args)
+        self.assertEqual(agents.read_bytes(), before)
+        args.replace_conflicts = True
+        fw.install(args)
+        self.assertTrue(agents.read_bytes().startswith(b"keep user prefix\n\n"))
+
+    def test_invalid_markers_and_unsupported_encoding_refused(self):
+        for raw in (fw.BLOCK_START.encode(), fw.BLOCK_END.encode() + b"\n" + fw.BLOCK_START.encode(),
+                    (fw.BLOCK_START + "\n" + fw.BLOCK_END + "\n") .encode() * 2,
+                    ("User text " + fw.BLOCK_START + "\n" + fw.BLOCK_END).encode(), b"\x81\xff"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    fw.merge_agents(raw, "rules")
+
+    def test_same_named_user_skill_conflict_blocks_all_writes(self):
+        args = self.args()
+        _, agents, skills = fw.targets(args)
+        agents.parent.mkdir(parents=True)
+        agents.write_bytes(b"Python: keep-path")
+        skill = skills / "project-workflow" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_bytes(b"User-owned skill")
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            fw.install(args)
+        self.assertEqual(agents.read_bytes(), b"Python: keep-path")
+        self.assertEqual(skill.read_bytes(), b"User-owned skill")
+
+    def test_concurrent_user_edit_during_plan_is_not_overwritten(self):
+        args = self.args()
+        _, agents, _ = fw.targets(args)
+        agents.parent.mkdir(parents=True)
+        agents.write_bytes(b"original settings")
+        real_desired = fw.desired
+        def edited_during_plan(args):
+            result = real_desired(args)
+            agents.write_bytes(b"concurrent new Python path")
+            return result
+        with patch.object(fw, "desired", side_effect=edited_during_plan):
+            with self.assertRaisesRegex(ValueError, "changed during merge planning"):
+                fw.install(args)
+        self.assertEqual(agents.read_bytes(), b"concurrent new Python path")
 
     def test_partial_write_has_recoverable_receipt(self):
         args = self.args()

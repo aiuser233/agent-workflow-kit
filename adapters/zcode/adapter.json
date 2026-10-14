@@ -3,8 +3,8 @@
   "display_name": "ZCode",
   "root_environment": null,
   "home_directory": ".zcode",
-  "agents_relative_path": null,
+  "agents_relative_path": "AGENTS.md",
   "skills_relative_path": null,
-  "path_basis": "用户原始规范仅给出 .zcode 数据根及 cli/v2 存储；未给出规范与 skills 加载位置，因此要求显式路径。",
+  "path_basis": "用户提供其机器的 ~/.zcode/AGENTS.md 路径，按当前用户目录解析；skills 加载位置仍未核实，要求显式路径。",
   "runtime_verified": false
 }

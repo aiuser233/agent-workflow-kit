@@ -4,13 +4,13 @@
 | --- | --- | --- |
 | 通用核心和共同业务规则 | 由双源共同章节适配 | 由双源共同章节适配 |
 | 清理参考 | `.codex` / `CODEX_HOME`、数据库及 rollout 线索 | `.zcode/cli`、`.zcode/v2`、表关联线索 |
-| 目标 AGENTS 默认路径 | `CODEX_HOME/AGENTS.md`，回退 `~/.codex/AGENTS.md` | 源材料未说明，必须显式指定 |
+| 目标 AGENTS 默认路径 | `CODEX_HOME/AGENTS.md`，回退 `~/.codex/AGENTS.md` | `~/.zcode/AGENTS.md`，依据用户提供路径，未实机读取 |
 | 技能安装默认目录 | `CODEX_HOME/skills`，回退 `~/.codex/skills` | 源材料未说明，必须显式指定 |
 | 文件部署、备份和回滚 | 临时目录测试通过 | 自定义临时路径测试通过 |
 | 宿主技能自动发现 | 本次未进行新会话实测 | 本机无 ZCode，未实测 |
 | UI 元数据 | 提供 `agents/openai.yaml` | 是否忽略/支持此元数据待核实 |
 | 清理业务实际执行 | 本次未执行 | 本次未执行 |
 
-路径依据是用户提供的原始规范与本机 skill-creator 说明，不把其视为 ZCode 当前版本官方接口。用户名用当前用户环境解析，后续子目录/表名仍须实际核实。`runtime_verified: false` 表示未验证宿主行为，并不否认临时文件部署测试。
+路径依据是用户提供的原始规范、用户后续给出的 ZCode 全局规则路径与本机 skill-creator 说明，不把其视为 ZCode 当前版本官方接口。用户名用当前用户环境解析，不写死示例用户名。ZCode skills 位置仍未知，后续子目录/表名须实际核实。`runtime_verified: false` 表示未验证宿主行为，并不否认临时文件部署测试。
 
 `inspect` 只检查两种已知根路径是否存在；存在不能判定当前 harness，缺失也不能判定没有自定义安装。安装要求显式 `--harness`。新 harness 要增加明确加载路径、元数据兼容规则和业务专属参考，并完成部署与行为验证。

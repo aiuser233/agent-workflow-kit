@@ -1,6 +1,6 @@
 {
   "name": "agent-workflow-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "schema_version": 1,
   "core": "AGENTS.md",
   "bootstrap": "SKILL.md",
@@ -20,10 +20,14 @@
   "sources": [
     {
       "path": "AGENTS（codex）.md",
+      "storage": "git-history",
+      "git_ref": "5d4148f",
       "sha256": "d60d15138cbb8e603562264212e15502fb48611703d5ed638c7c46e5e90ad8e0"
     },
     {
       "path": "AGENTS（zcode）.md",
+      "storage": "git-history",
+      "git_ref": "5d4148f",
       "sha256": "695ca8c6501b92c89205ebcc4d6da1c6b9e91ffe378f9674006c46282a318adb"
     }
   ],
