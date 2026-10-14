@@ -1,5 +1,5 @@
 interface:
   display_name: "source-backed-report"
-  short_description: "用户要求正式数据报告、带来源报告或可复现 HTML 报告时，生成有来源批注的报告和入口脚本。"
+  short_description: "为正式报告组织可定位来源、事实与计算分级，按指定格式交付并核验引用和复现数值。"
 policy:
   allow_implicit_invocation: true
