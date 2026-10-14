@@ -1,0 +1,5 @@
+interface:
+  display_name: "clarify-requirements"
+  short_description: "用户明确要求苏格拉底式提问、厘清真正需求或先澄清再执行时使用；普通行动请求只澄清必要缺口。"
+policy:
+  allow_implicit_invocation: true

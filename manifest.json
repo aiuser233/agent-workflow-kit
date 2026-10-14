@@ -1,0 +1,67 @@
+{
+  "name": "agent-workflow-kit",
+  "version": "0.1.0",
+  "schema_version": 1,
+  "core": "AGENTS.md",
+  "bootstrap": "SKILL.md",
+  "skills": [
+    "clarify-requirements",
+    "project-workflow",
+    "source-data-research",
+    "source-backed-report",
+    "exe-delivery",
+    "local-git-commit",
+    "cleanup-local-residue"
+  ],
+  "harnesses": [
+    "codex",
+    "zcode"
+  ],
+  "sources": [
+    {
+      "path": "AGENTS（codex）.md",
+      "sha256": "d60d15138cbb8e603562264212e15502fb48611703d5ed638c7c46e5e90ad8e0"
+    },
+    {
+      "path": "AGENTS（zcode）.md",
+      "sha256": "695ca8c6501b92c89205ebcc4d6da1c6b9e91ffe378f9674006c46282a318adb"
+    }
+  ],
+  "source_mapping": [
+    {
+      "skill": "clarify-requirements",
+      "source_section": 2,
+      "strategy": "shared"
+    },
+    {
+      "skill": "project-workflow",
+      "source_section": 3,
+      "strategy": "shared"
+    },
+    {
+      "skill": "source-data-research",
+      "source_section": 4,
+      "strategy": "shared"
+    },
+    {
+      "skill": "source-backed-report",
+      "source_section": 5,
+      "strategy": "shared"
+    },
+    {
+      "skill": "exe-delivery",
+      "source_section": 6,
+      "strategy": "shared"
+    },
+    {
+      "skill": "local-git-commit",
+      "source_section": 7,
+      "strategy": "shared"
+    },
+    {
+      "skill": "cleanup-local-residue",
+      "source_section": 8,
+      "strategy": "harness-specific references"
+    }
+  ]
+}

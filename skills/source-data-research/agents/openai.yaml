@@ -1,0 +1,5 @@
+interface:
+  display_name: "source-data-research"
+  short_description: "检索、下载或核验外部统计数据，或整理已有数据文件时，处理来源档案、口径、清洗和追溯；内部材料保留原身份。"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,5 @@
+interface:
+  display_name: "project-workflow"
+  short_description: "持续维护或需要复现的代码、数据、文档项目，或用户明确启用项目框架时，维护目录、README 和复现记录。"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,5 @@
+interface:
+  display_name: "local-git-commit"
+  short_description: "明确要求本地提交或帮我 git 一下，或符合用户默认里程碑提交条件时使用；只处理当前任务改动。"
+policy:
+  allow_implicit_invocation: true

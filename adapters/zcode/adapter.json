@@ -1,0 +1,10 @@
+{
+  "harness": "zcode",
+  "display_name": "ZCode",
+  "root_environment": null,
+  "home_directory": ".zcode",
+  "agents_relative_path": null,
+  "skills_relative_path": null,
+  "path_basis": "用户原始规范仅给出 .zcode 数据根及 cli/v2 存储；未给出规范与 skills 加载位置，因此要求显式路径。",
+  "runtime_verified": false
+}

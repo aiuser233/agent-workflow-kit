@@ -1,0 +1,7 @@
+* text=auto
+*.md text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+AGENTS（codex）.md -text !eol
+AGENTS（zcode）.md -text !eol

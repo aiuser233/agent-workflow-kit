@@ -1,0 +1,10 @@
+{
+  "harness": "codex",
+  "display_name": "Codex",
+  "root_environment": "CODEX_HOME",
+  "home_directory": ".codex",
+  "agents_relative_path": "AGENTS.md",
+  "skills_relative_path": "skills",
+  "path_basis": "用户提供的 Codex 规范，以及本机 skill-creator 指定的技能目录；运行时允许显式覆盖。",
+  "runtime_verified": false
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "exe-delivery"
+  short_description: "用户要求独立 Windows exe 或让无 Python 的人运行程序时，制作 GUI、模板、构建入口和交付说明。"
+policy:
+  allow_implicit_invocation: true
