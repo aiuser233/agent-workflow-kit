@@ -4,7 +4,7 @@
   "root_environment": null,
   "home_directory": ".zcode",
   "agents_relative_path": "AGENTS.md",
-  "skills_relative_path": null,
-  "path_basis": "用户提供其机器的 ~/.zcode/AGENTS.md 路径，按当前用户目录解析；skills 加载位置仍未核实，要求显式路径。",
-  "runtime_verified": false
+  "skills_relative_path": "skills",
+  "path_basis": "ZCode 实机验证（2026-10-14）：用户级规则为 ~/.zcode/AGENTS.md，用户级技能目录为 ~/.zcode/skills；按当前用户目录解析，运行时允许显式覆盖。已验证路径、部署、备份、卸载和技能发现；清理业务及业务技能实际执行仍待验证。",
+  "runtime_verified": true
 }

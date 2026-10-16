@@ -12,18 +12,18 @@
 
 ## 环境
 
-- 版本：`0.4.0`；日期：2026-10-14（Asia/Shanghai）。
+- 版本：`0.4.1`；日期：2026-10-16（Asia/Shanghai）。
 - 构建/安装/核验：Python 3.10+，全部运行脚本仅使用标准库；开发备份使用 Git。
 - 阅读规则无需 Python；安装、配置备份、回滚和卸载不需要 Git，只需 Python。受限环境人工部署必须完成同等备份与校验，否则停止。打包技能的 PyInstaller 仅在实际 exe 任务使用，不是框架依赖。
-- 本次在 Windows/Python 3.12 验证临时目录中的部署机制。尚未在 Codex/ZCode 新会话中验证自动发现和业务执行；ZCode 未安装于本机。
+- 本次在 Windows/Python 3.12 验证临时目录中的部署机制；另有 ZCode 实机验证确认用户级路径、技能部署和技能发现。Codex/ZCode 的业务技能实际执行与清理业务仍待宿主验收。
 
 ## 边界
 
 - 本项目不修改当前应用配置，只有用户明确运行 `install` 才写入目标；`plan`、`inspect`、`validate` 不写配置。
 - 不配置账号、凭据、MCP、插件或模型，不改变权限，不自动联网、推送或发布。
 - 未知 harness 没有适配器则拒绝安装；版本/表名按实际环境核实。
-- ZCode 全局规则按用户提供路径结构定位到当前用户 `~/.zcode/AGENTS.md`；skills 加载位置仍须显式指定。`.zcode/cli` 和 `.zcode/v2` 是数据存储线索，不能等同技能目录。
-- 当前交付是通用 skill 文件布局与可指定路径的 ZCode 部署，不能宣称已验证 ZCode 原生技能发现。
+- ZCode 全局规则按实机验证的用户路径定位到当前用户 `~/.zcode/AGENTS.md`，技能默认部署到 `~/.zcode/skills`；两者都允许显式覆盖。`.zcode/cli` 和 `.zcode/v2` 是数据存储线索，不能等同技能目录。
+- ZCode 的文件部署和技能发现已在真实机器验证；技能业务质量、清理业务和新会话刷新行为仍需实际任务验收。
 - Git 保留本地版本历史，GitHub 公开仓库用于远程备份和分享；日常任务仍只默认本地提交，推送需要用户明确要求。
 
 ## 术语和默认值
@@ -41,12 +41,13 @@
 - 2026-10-14：原始双文件已核对 Git 历史后移出工作目录，移除旧提取工具，今后直接维护框架源。
 - 2026-10-14：0.3.0 完善 7 个子技能：区分方案与实施授权、按规模维护 README、数据最小模板、报告格式分流、GUI 长任务与输出路径、Git 混合改动隔离及清理证据清单。
 - 2026-10-14：0.4.0 增加强制备份读回校验、独立备份位置与记录查询、单独快照、保留个人设置的卸载和完整恢复前安全快照；配置备份不依赖 Git。
+- 2026-10-16：0.4.1 根据用户提供的 ZCode 实机报告设置默认技能路径，安装时跳过 Codex UI 元数据，修复空备份目录输出和 Windows 8.3 短路径测试断言；分开记录部署、发现和业务验证状态。
 
 ## 当前状态与下一步
 
-0.4.0 配置备份与退出流程已实现，新增临时目录中的失败、中断、无 Git、个人设置保留与卸载恢复核验；检查结果见验证记录。当前应用配置未改动，宿主技能发现及业务行为仍待实测。
+0.4.1 已补齐 ZCode 默认路径和元数据过滤，配置备份与退出流程保持可用。实机报告确认 0.4.0 的 ZCode 安装、备份、卸载、重装和 7 个技能发现；本次改动在临时目录验证，未改真实用户配置。验证来源和边界见 [兼容矩阵](docs/compatibility.md) 与 [验证记录](docs/validation.md)。
 
-待办：核实 ZCode skills 加载路径，并实机读取/验证用户提供的全局规则路径；分别在新 Codex/ZCode 会话验证技能发现与行为场景；后续按实测结果补兼容矩阵。未支持其他 harness，增加时维护 adapter 和相应清理规则，不能只替换产品名。
+待办：分别在新 Codex/ZCode 会话验证技能业务行为和清理场景；后续按实测结果补兼容矩阵。未支持其他 harness，增加时维护 adapter 和相应清理规则，不能只替换产品名。
 
 ## 目录
 
@@ -92,10 +93,11 @@ python scripts/framework.py plan --harness codex
 
 Codex 默认遵循 `CODEX_HOME`，未设置时为当前用户 `~/.codex`；目标核心为 `AGENTS.md`，技能位于 `skills/`。自定义或测试根用 `--target-root`。两种 harness 都允许 `--agents-path` 和 `--skills-dir` 覆盖目标。
 
-ZCode 用户提供的全局路径结构为 `<用户目录>/.zcode/AGENTS.md`，安装器按当前用户解析，不写死示例用户名；`--target-root` 指定时使用该根下的 `AGENTS.md`。skills 路径仍须通过目标版本界面/可信配置核实：
+ZCode 的实机验证路径为 `<用户目录>/.zcode/AGENTS.md` 和 `<用户目录>/.zcode/skills`，安装器按当前用户解析，不写死示例用户名；`--target-root` 指定时使用该根下的 `AGENTS.md` 与 `skills/`。也可用 `--agents-path` 和 `--skills-dir` 覆盖：
 
 ```powershell
-python scripts/framework.py plan --harness zcode --skills-dir <已核实的技能目录>
+python scripts/framework.py plan --harness zcode
+# 自定义目标：python scripts/framework.py plan --harness zcode --agents-path <规则文件> --skills-dir <技能目录>
 ```
 
 确认路径和计划后，用相同参数将 `plan` 改为 `install`。这一步才修改目标。已有 AGENTS.md 保留原文并追加一个框架区块；没有则创建。重装不重复追加，升级只替换本框架区块，区块外原设置和后续新增内容保持原字节/编码。区块外用户要求优先于框架默认，安装 skill 分析并说明实质冲突；脚本不自动删除或改写自然语言要求。UTF-8（可带 BOM）/带 BOM 的 UTF-16 支持自动合并；不支持的编码、重复/破损标记拒绝写入。
@@ -121,9 +123,9 @@ python scripts/framework.py uninstall --harness codex
 python scripts/framework.py bundle
 ```
 
-产物 `output/agent-workflow-kit-0.4.0.zip` 包含 `agent-workflow-kit/` 整体目录。在目标 harness 中把这个目录作为安装 skill 使用，明确请求它迁移到选定 harness；或解压后直接运行脚本。不会自动递归注册子技能，必须执行展开安装。
+产物 `output/agent-workflow-kit-0.4.1.zip` 包含 `agent-workflow-kit/` 整体目录。在目标 harness 中把这个目录作为安装 skill 使用，明确请求它迁移到选定 harness；或解压后直接运行脚本。不会自动递归注册子技能，必须执行展开安装。
 
-受限环境人工部署也必须对所有待改文件备份并校验，记录不存在的路径和写后哈希，保留原文、框架标记及路径映射；做不到就停止，不能以手动复制绕过保护。推荐先配置 Python 再运行安装器，自动卸载依赖其收据。新会话发现失败时可按实际路径读取 `SKILL.md`。`agents/openai.yaml` 是 Codex UI 元数据，其他 harness 是否忽略它需核实。
+受限环境人工部署也必须对所有待改文件备份并校验，记录不存在的路径和写后哈希，保留原文、框架标记及路径映射；做不到就停止，不能以手动复制绕过保护。推荐先配置 Python 再运行安装器，自动卸载依赖其收据。新会话发现失败时可按实际路径读取 `SKILL.md`。`agents/openai.yaml` 是 Codex UI 元数据，ZCode 安装时会跳过它，因为实机验证确认 ZCode 忽略该文件。
 
 ## 开发与复现
 

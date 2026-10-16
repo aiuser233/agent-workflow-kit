@@ -15,9 +15,9 @@ python scripts/framework.py backup --harness codex
 python scripts/framework.py history --harness codex
 ```
 
-ZCode 安装/备份仍需显式 `--skills-dir`，自定义 AGENTS 使用 `--agents-path`；查询、回滚和卸载依据收据，不需要再填写这两个路径。非默认目标在命令中带同一个 `--target-root`。
+ZCode 默认使用当前用户 `~/.zcode/AGENTS.md` 和 `~/.zcode/skills`，可用 `--agents-path` 与 `--skills-dir` 覆盖；查询、回滚和卸载依据收据，不需要再填写这两个路径。非默认目标在命令中带同一个 `--target-root`。
 
-原文件保存在 `backups/*.bin`，收据将原路径与备份逐项对应，`.bin` 是原始文件字节，未做编码转换。备份目录可能包含个人要求和本机路径，只留在用户本地，不自动提交或上传。
+原文件保存在 `backups/*.bin`，收据将原路径与备份逐项对应，`.bin` 是原始文件字节，未做编码转换。没有已有文件需要备份时，输出的 `backup_directory` 为 `null`，仍保留记录原路径不存在的收据，可据此回滚新建文件。备份目录可能包含个人要求和本机路径，只留在用户本地，不自动提交或上传。
 
 ## 回滚一次操作
 

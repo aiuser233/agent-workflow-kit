@@ -52,7 +52,7 @@ class RecoveryTests(unittest.TestCase):
     def test_custom_backup_is_discovered_and_survives_uninstall(self):
         self.args.backup_dir = str(self.base / "independent backups")
         result = fw.install(self.args)
-        self.assertTrue(Path(result["receipt"]).is_relative_to(Path(self.args.backup_dir)))
+        self.assertTrue(Path(result["receipt"]).resolve().is_relative_to(Path(self.args.backup_dir).resolve()))
         self.args.backup_dir = None
         records = fw.history(self.args)["records"]
         self.assertEqual(records[0]["receipt"], result["receipt"])
@@ -102,6 +102,38 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(report["status"], "uninstalled")
         self.assertEqual(agents.read_bytes(), self.original)
         self.assertFalse(skills.exists())
+
+    def test_zcode_default_install_without_preexisting_files_can_uninstall(self):
+        args = Namespace(harness="zcode", target_root=str(self.base / "zcode-default"),
+                         agents_path=None, skills_dir=None, backup_dir=None,
+                         replace_conflicts=False, dry_run=False, remove_modified_block=False)
+        root, agents, skills = fw.targets(args)
+        self.assertEqual(skills, (root / "skills").resolve())
+        result = fw.install(args)
+        self.assertFalse((skills / "clarify-requirements" / "agents" / "openai.yaml").exists())
+        self.assertIsNone(result["backup_directory"])
+        self.assertEqual(fw.uninstall(args)["status"], "uninstalled")
+
+    def test_empty_backup_records_absent_paths_without_fake_directory(self):
+        self.args.target_root = str(self.base / "empty-user-home")
+        result = fw.backup(self.args)
+        self.assertIsNone(result["backup_directory"])
+        self.assertEqual(result["existing_files_backed_up"], 0)
+        self.assertGreater(result["absent_paths_recorded"], 0)
+        self.assertFalse((Path(result["receipt"]).parent / "backups").exists())
+
+    def test_zcode_upgrade_keeps_old_metadata_until_receipt_based_uninstall(self):
+        self.args.harness = "zcode"
+        root, incoming = fw.desired(self.args)
+        _, _, skills = fw.targets(self.args)
+        metadata = skills / "clarify-requirements/agents/openai.yaml"
+        incoming[metadata] = b"old Codex UI metadata"
+        with patch.object(fw, "desired", return_value=(root, incoming)):
+            fw.install(self.args)
+        fw.install(self.args)
+        self.assertEqual(metadata.read_bytes(), b"old Codex UI metadata")
+        self.assertEqual(fw.uninstall(self.args)["status"], "uninstalled")
+        self.assertFalse(metadata.exists())
 
     def test_uninstall_preserves_outside_user_bytes_and_modified_skill(self):
         for encoding, bom in (("utf-8", b""), ("utf-8", b"\xef\xbb\xbf"),

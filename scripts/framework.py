@@ -105,7 +105,7 @@ def targets(args):
         supplied = getattr(args, flag)
         default = adapter[key]
         if not supplied and not default:
-            raise ValueError(f"{args.harness} requires explicit --{flag.replace('_', '-')} (loader path unverified)")
+            raise ValueError(f"{args.harness} requires explicit --{flag.replace('_', '-')}")
         result.append(absolute(supplied or root / default))
     agents, skills = result
     if skills == agents or skills in agents.parents:
@@ -135,6 +135,10 @@ def desired(args):
     for name in manifest["skills"]:
         for source in sorted((ROOT / "skills" / name).rglob("*")):
             if source.is_file():
+                # ZCode ignores Codex-only UI metadata; do not create a misleading
+                # file in its user skill tree.
+                if args.harness == "zcode" and source.relative_to(ROOT / "skills" / name).as_posix() == "agents/openai.yaml":
+                    continue
                 target = absolute(skills / name / source.relative_to(ROOT / "skills" / name))
                 if ROOT == target or ROOT in target.parents:
                     raise ValueError("Skill target overlaps source")
@@ -311,7 +315,8 @@ def install(args):
     receipt_path, receipt = snapshot(root, changed, "install", getattr(args, "backup_dir", None),
                                      harness=args.harness, agents_path=str(agents), skills_dir=str(skills))
     apply_snapshot(receipt_path, receipt, incoming)
-    return {"receipt": str(receipt_path), "backup_directory": str(receipt_path.parent / "backups"),
+    backup_directory = str(receipt_path.parent / "backups") if any(item.get("backup") for item in receipt["files"]) else None
+    return {"receipt": str(receipt_path), "backup_directory": backup_directory,
             "changed_files": len(changed), "unchanged_files": len(rows) - len(changed), "backups_verified": True}
 
 
@@ -325,7 +330,8 @@ def backup(args):
                              harness=args.harness, agents_path=str(agents), skills_dir=str(skills))
     receipt["status"] = "snapshot"
     write_json(path, receipt)
-    return {"receipt": str(path), "backup_directory": str(path.parent / "backups"),
+    backup_directory = str(path.parent / "backups") if any(item.get("backup") for item in receipt["files"]) else None
+    return {"receipt": str(path), "backup_directory": backup_directory,
             "existing_files_backed_up": sum(x["backup"] is not None for x in receipt["files"]),
             "absent_paths_recorded": sum(x["backup"] is None for x in receipt["files"]), "target_files_changed": 0}
 

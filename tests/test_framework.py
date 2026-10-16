@@ -39,9 +39,14 @@ class DeploymentTests(unittest.TestCase):
                 result = fw.install(args)
                 for path, data in expected.items():
                     self.assertEqual(path.read_bytes(), data)
+                _, _, skills = fw.targets(args)
+                for name in fw.read_json(ROOT / "manifest.json")["skills"]:
+                    self.assertEqual((skills / name / "agents/openai.yaml").exists(), harness == "codex")
                 core = next(iter(expected)).read_text(encoding="utf-8")
                 self.assertIn(f"`{harness}`", core)
-                self.assertEqual(fw.install(args)["changed_files"], 0)
+                reinstalled = fw.install(args)
+                self.assertEqual(reinstalled["changed_files"], 0)
+                self.assertIsNone(reinstalled["backup_directory"])
                 self.assertEqual(fw.rollback(result["receipt"])["restored_files"], len(expected))
                 self.assertTrue(all(not p.exists() for p in expected))
 
@@ -86,14 +91,16 @@ class DeploymentTests(unittest.TestCase):
         fw.rollback(replacement["receipt"])
         self.assertEqual(agents.read_bytes(), b"user customization")
 
-    def test_missing_zcode_loader_and_source_overlap_refused(self):
+    def test_zcode_default_loader_and_source_overlap_refused(self):
         args = self.args("zcode")
         args.agents_path = None
         _, agents, _ = fw.targets(args)
         self.assertEqual(agents, (self.base / "zcode" / "AGENTS.md").resolve())
         args.skills_dir = None
-        with self.assertRaisesRegex(ValueError, "explicit --skills-dir"):
-            fw.plan(args)
+        _, _, skills = fw.targets(args)
+        self.assertEqual(skills, (self.base / "zcode" / "skills").resolve())
+        _, files = fw.desired(args)
+        self.assertFalse(any(path.as_posix().endswith("agents/openai.yaml") for path in files))
         args = self.args()
         args.target_root = str(ROOT)
         with self.assertRaisesRegex(ValueError, "overlaps source"):
@@ -120,6 +127,11 @@ class DeploymentTests(unittest.TestCase):
                                 cwd=self.base, text=True, capture_output=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)["links_valid"])
+        result = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "scripts/framework.py"), "inspect"],
+                                cwd=self.base, text=True, capture_output=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        zcode = next(item for item in json.loads(result.stdout)["candidates"] if item["harness"] == "zcode")
+        self.assertFalse(zcode["explicit_skills_path_required"])
 
     def test_link_destination_refused_when_available(self):
         outside = self.base / "outside"
@@ -269,9 +281,7 @@ class DeploymentTests(unittest.TestCase):
         commands = [
             ["validate"],
             ["install", "--harness", "codex", "--target-root", str(self.base / "isolated-codex")],
-            ["install", "--harness", "zcode", "--target-root", str(self.base / "isolated-zcode"),
-             "--agents-path", str(self.base / "规则" / "AGENTS.md"),
-             "--skills-dir", str(self.base / "技能")],
+            ["install", "--harness", "zcode", "--target-root", str(self.base / "isolated-zcode")],
         ]
         for command in commands:
             completed = subprocess.run([sys.executable, "-X", "utf8", str(script), *command],
